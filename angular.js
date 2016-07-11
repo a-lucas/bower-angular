@@ -1,5 +1,5 @@
 /**
- * @license AngularJS v1.5.8-build.4928+sha.e8c2e11
+ * @license AngularJS v1.5.1-local+sha.15cadd7
  * (c) 2010-2016 Google, Inc. http://angularjs.org
  * License: MIT
  */
@@ -57,7 +57,7 @@ function minErr(module, ErrorConstructor) {
       return match;
     });
 
-    message += '\nhttp://errors.angularjs.org/1.5.8-build.4928+sha.e8c2e11/' +
+    message += '\nhttp://errors.angularjs.org/1.5.1-local+sha.15cadd7/' +
       (module ? module + '/' : '') + code;
 
     for (i = SKIP_INDEXES, paramPrefix = '?'; i < templateArgs.length; i++, paramPrefix = '&') {
@@ -2491,6 +2491,7 @@ function toDebugString(obj) {
   $ControllerProvider,
   $DateProvider,
   $DocumentProvider,
+  $EngineQueueProvider,
   $$IsDocumentHiddenProvider,
   $ExceptionHandlerProvider,
   $FilterProvider,
@@ -2541,10 +2542,10 @@ function toDebugString(obj) {
  * - `codeName` – `{string}` – Code name of the release, such as "jiggling-armfat".
  */
 var version = {
-  full: '1.5.8-build.4928+sha.e8c2e11',    // all of these placeholder strings will be replaced by grunt's
+  full: '1.5.1-local+sha.15cadd7',    // all of these placeholder strings will be replaced by grunt's
   major: 1,    // package task
   minor: 5,
-  dot: 8,
+  dot: 1,
   codeName: 'snapshot'
 };
 
@@ -2658,6 +2659,7 @@ function publishExternalAPI(angular) {
         $cacheFactory: $CacheFactoryProvider,
         $controller: $ControllerProvider,
         $document: $DocumentProvider,
+        $engineQueue: $EngineQueueProvider,
         $$isDocumentHidden: $$IsDocumentHiddenProvider,
         $exceptionHandler: $ExceptionHandlerProvider,
         $filter: $FilterProvider,
@@ -10455,6 +10457,100 @@ function $$IsDocumentHiddenProvider() {
 }
 
 /**
+ * Created by antoine on 18/02/16.
+ */
+
+function EngineQueue() {
+  var self = this;
+  var setTimeout = window.setTimeout;
+  var clearTimeout = window.clearTimeout;
+  var Event = window.Event;
+  var dispatchEvent = window.dispatchEvent;
+
+
+  /**
+   *
+   * @type {number} number of running promises
+   */
+  var promises= 0;
+  /**
+   *
+   * @type {boolean}
+   */
+  var done= false;
+  /**
+   *
+   * @type {number} idle bufer time in ms
+   */
+  var timeoutValue= 500;
+  /**
+   *
+   * @type {TimeOut} the timeout that runs only when all the queues are empty with the idle check timeoutValue
+   */
+  var timeout= null;
+
+  /**
+   *
+   * @param object Add an object:
+   * @param type string httpBackend|promise|timeout
+   */
+  self.incr = function() {
+    if (timeout !== null) {
+      clearTimeout(timeout);
+    }
+    if (done === true) return;
+
+    promises++;
+  };
+
+  /**
+   *
+   * @param object
+   * @param string httpBackend|promise|timeout
+   */
+  self.decr =function() {
+    if (done === true) return;
+
+    promises--;
+
+    if (timeout !== null) {
+      clearTimeout(timeout);
+    }
+
+    if (promises === 0) {
+
+      timeout = setTimeout(function() {
+        if (promises === 0) {
+          var StackQueueEmpty = new Event('StackQueueEmpty');
+          if (typeof dispatchEvent === 'function') {
+            dispatchEvent(StackQueueEmpty);
+          }
+          done = true;
+        }
+      }, timeoutValue, false);
+    }
+  };
+
+}
+
+/**
+ * @ngdoc service
+ * @name $engineQueue
+ * @requires
+ *
+ * @description
+ * A Queue that stores the running status of the Angular APplication
+ * An Empty queue means the application is in 'idle'.
+ * It is used internally
+ *
+ */
+function $EngineQueueProvider() {
+    this.$get = [ function() {
+      return new EngineQueue();
+    }];
+}
+
+/**
  * @ngdoc service
  * @name $exceptionHandler
  * @requires ng.$log
@@ -10498,8 +10594,19 @@ function $$IsDocumentHiddenProvider() {
  *
  */
 function $ExceptionHandlerProvider() {
-  this.$get = ['$log', function($log) {
+
+  this.$get = ['$log', '$window', function($log, $window) {
     return function(exception, cause) {
+      var err = new Error();
+      var stack = err.stack;
+      var ErrorEvent = new $window.CustomEvent('ServerExceptionHandler', {
+        details: {
+          exception: exception,
+          cause: cause,
+          err: JSON.stringify(err)
+        }
+      });
+      $window.dispatchEvent(ErrorEvent);
       $log.error.apply($log, arguments);
     };
   }];
@@ -11157,7 +11264,7 @@ function $HttpProvider() {
      *   * cache a specific response - set config.cache value to TRUE or to a cache object
      *
      * If caching is enabled, but neither the default cache nor config.cache are set to a cache object,
-     * then the default `$cacheFactory($http)` object is used.
+     * then the default `$cacheFactory("$http")` object is used.
      *
      * The default cache value can be set by updating the
      * {@link ng.$http#defaults `$http.defaults.cache`} property or the
@@ -12061,6 +12168,7 @@ function createHttpBackend($browser, createXhr, $browserDefer, callbacks, rawDoc
 
   function jsonpReq(url, callbackPath, done) {
     url = url.replace('JSON_CALLBACK', callbackPath);
+
     // we can't use jQuery/jqLite here because jQuery does crazy stuff with script elements, e.g.:
     // - fetches local scripts via XHR and evals them
     // - adds and immediately removes script elements from the document
@@ -13792,27 +13900,26 @@ function $LocationProvider() {
  * {@link ng.$logProvider ng.$logProvider#debugEnabled} to change this.
  *
  * @example
-   <example module="logExample">
-     <file name="script.js">
-       angular.module('logExample', [])
-         .controller('LogController', ['$scope', '$log', function($scope, $log) {
+ <example module="logExample">
+ <file name="script.js">
+ angular.module('logExample', [])
+ .controller('LogController', ['$scope', '$log', function($scope, $log) {
            $scope.$log = $log;
            $scope.message = 'Hello World!';
          }]);
-     </file>
-     <file name="index.html">
-       <div ng-controller="LogController">
-         <p>Reload this page with open console, enter text and hit the log button...</p>
-         <label>Message:
-         <input type="text" ng-model="message" /></label>
-         <button ng-click="$log.log(message)">log</button>
-         <button ng-click="$log.warn(message)">warn</button>
-         <button ng-click="$log.info(message)">info</button>
-         <button ng-click="$log.error(message)">error</button>
-         <button ng-click="$log.debug(message)">debug</button>
-       </div>
-     </file>
-   </example>
+ </file>
+ <file name="index.html">
+ <div ng-controller="LogController">
+ <p>Reload this page with open console, enter text and hit the log button...</p>
+ Message:
+ <input type="text" ng-model="message"/>
+ <button ng-click="$log.log(message)">log</button>
+ <button ng-click="$log.warn(message)">warn</button>
+ <button ng-click="$log.info(message)">info</button>
+ <button ng-click="$log.error(message)">error</button>
+ </div>
+ </file>
+ </example>
  */
 
 /**
@@ -13835,7 +13942,7 @@ function $LogProvider() {
   this.debugEnabled = function(flag) {
     if (isDefined(flag)) {
       debug = flag;
-    return this;
+      return this;
     } else {
       return debug;
     }
@@ -16311,10 +16418,10 @@ function $ParseProvider() {
  */
 function $QProvider() {
   var errorOnUnhandledRejections = true;
-  this.$get = ['$rootScope', '$exceptionHandler', function($rootScope, $exceptionHandler) {
+  this.$get = ['$rootScope', '$exceptionHandler', '$engineQueue', function($rootScope, $exceptionHandler, $engineQueue) {
     return qFactory(function(callback) {
       $rootScope.$evalAsync(callback);
-    }, $exceptionHandler, errorOnUnhandledRejections);
+    }, $exceptionHandler, $engineQueue, errorOnUnhandledRejections);
   }];
 
   /**
@@ -16341,10 +16448,10 @@ function $QProvider() {
 
 function $$QProvider() {
   var errorOnUnhandledRejections = true;
-  this.$get = ['$browser', '$exceptionHandler', function($browser, $exceptionHandler) {
+  this.$get = ['$browser', '$exceptionHandler', '$engineQueue', function($browser, $exceptionHandler, $engineQueue) {
     return qFactory(function(callback) {
       $browser.defer(callback);
-    }, $exceptionHandler, errorOnUnhandledRejections);
+    }, $exceptionHandler, $engineQueue, errorOnUnhandledRejections);
   }];
 
   this.errorOnUnhandledRejections = function(value) {
@@ -16367,7 +16474,7 @@ function $$QProvider() {
  *     promises rejections.
  * @returns {object} Promise manager.
  */
-function qFactory(nextTick, exceptionHandler, errorOnUnhandledRejections) {
+function qFactory(nextTick, exceptionHandler, engineQueue, errorOnUnhandledRejections) {
   var $qMinErr = minErr('$q', TypeError);
   var queueSize = 0;
   var checkQueue = [];
@@ -16495,6 +16602,7 @@ function qFactory(nextTick, exceptionHandler, errorOnUnhandledRejections) {
 
   function Deferred() {
     this.promise = new Promise();
+    engineQueue.incr();
   }
 
   extend(Deferred.prototype, {
@@ -16506,6 +16614,7 @@ function qFactory(nextTick, exceptionHandler, errorOnUnhandledRejections) {
           "Expected promise to be resolved with value other than itself '{0}'",
           val));
       } else {
+        engineQueue.decr();
         this.$$resolve(val);
       }
 
@@ -16544,6 +16653,7 @@ function qFactory(nextTick, exceptionHandler, errorOnUnhandledRejections) {
 
     reject: function(reason) {
       if (this.promise.$$state.status) return;
+      engineQueue.decr();
       this.$$reject(reason);
     },
 
